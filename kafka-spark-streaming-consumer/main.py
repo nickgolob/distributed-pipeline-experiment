@@ -1,69 +1,43 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col
-from pyspark.sql.types import StructType, StructField, IntegerType, StringType
-import psycopg2
-import json
-import os
+from pyspark.sql.functions import expr
 
-# Environment variables
-KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:9092")
-POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
-POSTGRES_USER = os.getenv("POSTGRES_USER", "admin")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "admin")
-POSTGRES_DB = os.getenv("POSTGRES_DB", "mydatabase")
-
-# Spark session
+# Initialize Spark session
 spark = SparkSession.builder \
-    .appName("KafkaPostgresConsumer") \
+    .appName("KafkaSparkPostgres") \
     .getOrCreate()
 
-# Read data from Kafka
-kafka_df = spark \
-    .readStream \
-    .format("kafka") \
-    .option("kafka.bootstrap.servers", KAFKA_BROKER) \
-    .option("subscribe", "test-topic") \
+# Kafka configuration
+kafka_bootstrap_servers = "kafka:9092"  # Adjust if necessary
+kafka_topic = "your_kafka_topic"
+
+# Read from Kafka
+raw_stream_df = spark.readStream.format("kafka") \
+    .option("kafka.bootstrap.servers", kafka_bootstrap_servers) \
+    .option("subscribe", kafka_topic) \
     .load()
 
-# Define the schema for the Kafka value
-schema = StructType([
-    StructField("id", IntegerType()),
-    StructField("value", StringType())
-])
+# Assume Kafka message is a string; adjust as needed based on your data format
+messages_df = raw_stream_df.selectExpr("CAST(value AS STRING)").alias("message")
 
-# Parse the Kafka value into a DataFrame
-kafka_df = kafka_df.selectExpr("CAST(value AS STRING)") \
-    .select(col("value").cast("string")) \
-    .selectExpr("CAST(value AS STRING) AS json_value") \
-    .selectExpr("json_value") \
-    .withColumn("json", spark.sql.functions.from_json("json_value", schema)) \
-    .select("json.*")
+# Transform the data (example: split the message into words or apply your logic)
+transformed_df = messages_df.select(
+    expr("split(message, ' ')").alias("words")  # Example transformation
+)
 
-# Function to write to PostgreSQL
-def write_to_postgres(batch_df, batch_id):
-    # Convert the DataFrame to Pandas to insert into PostgreSQL
-    data = batch_df.toPandas()
+# Define PostgreSQL JDBC options
+postgres_url = "jdbc:postgresql://postgres:5432/messages_db"
+postgres_properties = {
+    "user": "admin", 
+    "password": "admin", 
+    "driver": "org.postgresql.Driver"
+}
 
-    # Connect to PostgreSQL
-    conn = psycopg2.connect(
-        dbname=POSTGRES_DB, user=POSTGRES_USER, password=POSTGRES_PASSWORD, host=POSTGRES_HOST
-    )
-    cursor = conn.cursor()
-
-    # Insert into PostgreSQL
-    for _, row in data.iterrows():
-        cursor.execute("INSERT INTO messages (data) VALUES (%s)", [json.dumps(row.to_dict())])
-
-    conn.commit()
-    cursor.close()
-    conn.close()
-
-# Write the stream to PostgreSQL
-query = kafka_df \
-    .writeStream \
+# Write the streaming data to PostgreSQL
+query = transformed_df.writeStream \
+    .foreachBatch(lambda batch_df, batch_id: 
+        batch_df.write.jdbc(url=postgres_url, table="messages", mode="append", properties=postgres_properties)
+    ) \
     .outputMode("append") \
-    .foreachBatch(write_to_postgres) \
     .start()
 
-# Await termination of the stream
 query.awaitTermination()

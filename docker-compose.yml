@@ -1,20 +1,15 @@
-version: '3.8'
-
 services:
+
+  # https://github.com/bitnami/containers/blob/main/bitnami/kafka/README.md#using-a-docker-compose-file
   kafka:
     image: bitnami/kafka:latest
-    container_name: kafka
     environment:
-      - ALLOW_PLAINTEXT_LISTENER=yes
-      - KAFKA_ENABLE_KRAFT=yes
-      - KAFKA_CFG_NODE_ID=1
+      - KAFKA_CFG_NODE_ID=0
       - KAFKA_CFG_PROCESS_ROLES=controller,broker
-      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@1
       - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
-      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@kafka:9093
       - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
-    ports:
-      - "9092:9092"
 
   spark:
     image: bitnami/spark:latest
@@ -24,7 +19,8 @@ services:
     ports:
       - "8080:8080"  # Spark UI
     volumes:
-      - ./consumer:/consumer  # Mount consumer code for Spark job
+      - ./kafka-spark-streaming-consumer:/kafka-spark-streaming-consumer
+      - ./requirements.txt:/requirements.txt 
     depends_on:
       - kafka
       - postgres
@@ -54,18 +50,6 @@ services:
       - kafka
     environment:
       - KAFKA_BROKER=kafka:9092
-
-  consumer:
-    build: ./kafka-consumer
-    depends_on:
-      - kafka
-      - postgres
-    environment:
-      - KAFKA_BROKER=kafka:9092
-      - POSTGRES_HOST=postgres
-      - POSTGRES_USER=admin
-      - POSTGRES_PASSWORD=admin
-      - POSTGRES_DB=mydatabase
 
   reader:
     build: ./redis-postgres-reader
